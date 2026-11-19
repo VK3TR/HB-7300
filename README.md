@@ -26,6 +26,26 @@ kernel is **FreeRTOS** (not "µITRON-style"); **`SX3765`** is the front-panel RL
 (not the main-CPU version); and the container's post-MAIN components are **DSP Program (TI AIS) / DSP Data /
 FPGA** (`size2/4/6`=compressed, `size3/5/7`=decompressed).
 
+A second, independent IC-7300 effort is **[zarthur/ic-7300_firmware](https://github.com/zarthur/ic-7300_firmware)**
+("100% vibe coded"), aimed at **on-device FT8**. It reaches the *same* constants from scratch — magic `3wfU`,
+0x2C header, `7e` trailer, LZSS (4096 / `0xFEE` / `(hi&0xF)+3`), load base `0x20005000`, reset `0x20005050`,
+decompressor `0x2000425C`, and the MD5 routines (`0x2003c860/890`, `0x2003d38c`) — a near-total three-way
+agreement (us, zarthur, jeskko). It contributed the **fully-resolved container header model** now folded
+into our tooling: the 7 u32 are **four payloads** — MAIN stored, then **(stored, decoded)** pairs for
+DSP_PROGRAM / DSP_DATA / FPGA — which we re-verified against our own v1.42 image (all four MD5s match, each
+sibling LZSS-decodes to its header length: DSP_PROGRAM → `"TIPA"` AIS, FPGA → `"31601130"` bitstream; file
+closes exactly). zarthur also reports the **most valuable empirical datapoint in this constellation**: a
+*modified, MD5-resealed, unsigned* image **booted on real hardware** (display-only, label changed; stock
+return/recovery unproven) — turning the no-signature conclusion from analytical to observed. Its FT8 work is
+a **portable C prototype** (from `kgoba/ft8_lib`, host-validated vs WSJT-X), built from scratch rather than by
+enabling any decoder framework — the realistic template for FT8-on-7300.
+
+> **Family context** (from sq6emm's BYOF/patch repos for the IC-705/9700/905/7610): the whole Icom RZ/A1
+> line shares this LZSS codec and **keyless MD5 integrity with no signature** — confirmed across 7300 / 7610 /
+> 705 / 9700 (the IC-905, newest, appears to add real multi-component crypto). The **7300 is the one
+> generation that predates the per-model "autokey" byte-obfuscation** the 7610/705/9700 wrap their on-disk
+> payloads in, so 7300 containers sit in the clear and are the *simplest* case to patch.
+
 ---
 
 ## What the IC-7300 runs
@@ -136,11 +156,11 @@ docs/hardware.md                    silicon map (R7S721000/TMS320C6745/Cyclone I
 docs/dsp-interface.md               MAIN<->DSP control interface: 25-param shadow table, apply/queue transport, f/w load
 docs/rx-signal-access.md            what RX data the main CPU can see (no audio tap -> decoders belong on DSP/PC)
 docs/flash-driver.md                SPI-NOR flash driver (W25 via SPIBSC): erase/program primitive for reflashing
-docs/container-format.md            .dat container: 7 section-lengths + per-section MD5; differential 64KB flash
+docs/container-format.md            .dat container: 4 LZSS payloads (MAIN + DSP/FPGA stored/decoded pairs) + per-payload MD5; differential 64KB flash
 tools/depack_lzss.py                LZSS depacker (main image extractor)
 tools/pack_lzss.py                  LZSS compressor (firmware-compatible; round-trip verified)
 tools/repack_main.py                full chain: extract / rebuild a modified MAIN image into a .dat
-tools/reseal.py                     verify / re-seal the .dat (recompute MAIN-image MD5 after a mod)
+tools/reseal.py                     verify / re-seal the .dat (recompute all four payloads' MD5: MAIN, DSP_PROGRAM, DSP_DATA, FPGA)
 tools/civ_extract.py                dump the CI-V command table from the image
 tools/render_assets.py              render the raw 8-bpp UI bitmaps
 tools/ghidra_load.py                PyGhidra loader (correct base + flash mapped)
@@ -161,7 +181,7 @@ flash dump, the DSP/FPGA images, or hardware.
 | 5 | Radio control | band/PLL, BPF+relays, internal ATU, SWR/power metering, TX gain/ALC, scope flow | `[here]` |
 | 6 | Settings/cal/service | menu model, calibration data layout, ADJUST-mode entry/functions | `[here]` |
 | 7 | Graphics pipeline | interpret OpenVG path format / emulate renderer; map screen resource manager | `[here]` |
-| 8 | Update & integrity | **DONE for MAIN**: no signature; 7 u32 = section lengths; per-section MD5 (verified); differential 64KB flash; flash driver + reseal tool. Open: DSP/FPGA section sub-format | done (MAIN) |
+| 8 | Update & integrity | **DONE**: no signature; header = 4 payloads (MAIN + stored/decoded pairs for DSP_PROGRAM/DSP_DATA/FPGA); per-payload MD5 **verify + reseal for all four** (verified, exact closure); differential 64KB flash; flash driver + full repack chain. Open only: DSP/FPGA payloads' *internal* formats | done |
 | 9 | Audio | voice memory record/playback (WAV), voice synth, RTTY/PSK decoders | `[here]` |
 | 10 | Dynamic analysis | QEMU RZ/A1 / full-system emulation to *run* the firmware | optional |
 

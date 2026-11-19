@@ -1,35 +1,54 @@
 # Firmware update container (`.dat`) format
 
 Fully reverse-engineered (orchestrator `FUN_20025AE4`, MD5-verify+flash `FUN_20024DB8`) and
-**empirically verified** (sections 0 and 1 MD5-match with standard MD5). This is what the
+**empirically verified end-to-end**: all four payloads MD5-match with standard MD5, each sibling
+payload LZSS-decodes to its header-declared length, and the file closes exactly. This is what the
 repack/reseal toolchain targets.
 
 ## Layout
+The 0x2C header holds 7 little-endian u32 that describe **four LZSS payloads** — one *stored*
+length for the MAIN image, then a **(stored, decoded)** length pair for each of the three
+TI-DSP / FPGA components:
+
 ```
 offset   size      field
-0x00     4         magic  "3wfU"
-0x04     12        version string  "3.112.003.16"
-0x10     7 x u32   SECTION LENGTHS  (little-endian)                        } 0x2C header
-0x2C     hdr[0]    section 0 DATA  = MAIN-CPU flash image (maps to flash 0x18000000)
-         16        MD5(section 0 data)
-         hdr[1]    section 1 DATA   + 16-byte MD5
-         hdr[2]..  further sections (DSP Program / DSP Data / FPGA …) + MD5 each
+0x00     4         magic  "3wfU"   (LE32 0x55667733)
+0x04     12        version string  "3.112.003.16"   (not the public release number)
+0x10     u32       MAIN         stored length     hdr[0]  = 0x252BF0           }
+0x14     u32       DSP_PROGRAM  stored length     hdr[1]  = 0x017E46           }
+0x18     u32       DSP_PROGRAM  decoded length    hdr[2]  = 0x027F08           } 0x2C
+0x1C     u32       DSP_DATA     stored length     hdr[3]  = 0x0B03AC           } header
+0x20     u32       DSP_DATA     decoded length    hdr[4]  = 0x0AFF08           }
+0x24     u32       FPGA         stored length     hdr[5]  = 0x0AA759           }
+0x28     u32       FPGA         decoded length    hdr[6]  = 0x0D1D14           }
+0x2C     hdr[0]    MAIN stored data  = MAIN-CPU flash image (maps to flash 0x18000000)
+         16        MD5(MAIN stored data)
+         hdr[1]    DSP_PROGRAM stored data   + 16-byte MD5   (decodes to a TI "TIPA" AIS image)
+         hdr[3]    DSP_DATA    stored data   + 16-byte MD5
+         hdr[5]    FPGA        stored data   + 16-byte MD5   ("31601130"-prefixed bitstream)
 ...      2         end marker  "7e"  (0x37 0x65)
 ```
-- **Each of the 7 header u32 is a section length.** Sections are concatenated, **each followed
-  by a 16-byte `MD5()` of its own data**. Verified: `MD5(file[0x2C : 0x2C+hdr[0]]) ==`
-  the 16 bytes at `0x2C+hdr[0]` (section 0, the 2.4 MB MAIN image), and likewise section 1.
-- **Partial updates:** a `.dat` only carries the sections being updated, so the present sections
-  don't sum to the (full-device) header. The example file has section 0 (MAIN, `0x252BF0`) and
-  section 1 present; the rest is the DSP/FPGA payload.
-- **Sections 2+ identified** (via jeskko/ic7300-homebrew — see Related work): the three components
-  after the MAIN region are **DSP Program** (a TI **AIS** boot script, magic `TIPA`/`0x41504954`, for
-  the TMS320C6745), **DSP Data**, and the **FPGA** bitstream (Cyclone IV). Each is LZSS+MD5 like the
-  MAIN image, but the header fields pair up as **`size2/4/6` = compressed lengths** and
-  **`size3/5/7` = decompressed lengths**, with offsets `comp0 = size1+0x3c`, `comp1 = comp0+size2+0x10`,
-  `comp2 = comp1+size4+0x10`. (Our `reseal.py` walks the simple MAIN sections only and therefore
-  "mismatches" at the first component, which uses `size2` not `size3` — expected, and harmless since we
-  only re-seal the MAIN image.)
+- **Four payloads**, concatenated, **each followed by a 16-byte `MD5()` of its own STORED
+  (on-disk, still-LZSS-compressed) bytes.** The whole file closes exactly:
+  `0x2C + Σ(stored) + 4·16 + 2 == filesize` (verified: 3,954,089 bytes for v1.42).
+- **Verified payload table (v1.42):**
+
+  | payload | data @file | stored len | MD5 @file | decoded len | decoded prefix |
+  |---|---|---|---|---|---|
+  | MAIN | 0x00002C | 0x252BF0 | 0x252C1C | (len word inside, +0x10000) | ARM image @0x20005000 |
+  | DSP_PROGRAM | 0x252C2C | 0x017E46 | 0x26AA72 | 0x027F08 | `54 49 50 41` = **"TIPA"** (TI AIS, TMS320C6745) |
+  | DSP_DATA | 0x26AA82 | 0x0B03AC | 0x31AE2E | 0x0AFF08 | `40 18 00 00 …` |
+  | FPGA | 0x31AE3E | 0x0AA759 | 0x3C5597 | 0x0D1D14 | `33 31 36 30 31 31 33 30` = **"31601130"** (Cyclone IV) |
+
+- All four payloads use the **same LZSS codec** (`tools/depack_lzss.py`). The MAIN image embeds its
+  decoded length as a u32 at payload `+0x10000` (file `0x1002C`); the three siblings have **no
+  embedded length word** — the decoder takes the decoded length straight from the header.
+- **Partial updates:** a `.dat` can carry only the payloads being updated. `tools/reseal.py` walks
+  the fixed MAIN → DSP_PROGRAM → DSP_DATA → FPGA order and includes a payload only while it and its
+  MD5 fit before the 2-byte trailer, so MAIN-only or MAIN+DSP files reseal correctly too.
+- The header semantics and offset formulas were first identified via jeskko/ic7300-homebrew and
+  independently corroborated by zarthur/ic-7300_firmware (see **Related work** in the
+  [README](../README.md#related-work)); the exact values above are confirmed against our own v1.42 image.
 
 ## Integrity & flashing (from the code)
 - Integrity is **standard MD5 per section** — **no signature** (see `modding-feasibility.md`).
@@ -47,15 +66,19 @@ depack_lzss.py  → modify → (re-LZSS-compress) → place back in section 0 (k
                  if it fits) → reseal.py reseal firmware.dat out.dat   # fixes section 0's MD5
 ```
 
-`tools/reseal.py` verifies all simple sections and re-computes their MD5 trailers. Proven:
-round-trip on an unmodified file is **byte-identical**, a MAIN-image edit re-seals to a valid
-MD5, and the DSP/FPGA region is left untouched. If a modification changes section 0's **length**,
-update `hdr[0]` too (subsequent sections shift).
+`tools/reseal.py` verifies **all four payloads** and re-computes **every present payload's** MD5
+trailer. Proven: round-trip on an unmodified file is **byte-identical**; a MAIN-image edit and a
+DSP/FPGA edit each re-seal to a valid MD5; `verify` catches a single flipped byte in any payload and
+`reseal` then restores all four digests. If a modification changes a payload's **length**, update
+the matching header word(s) too (subsequent payloads shift).
 
 ## Status
-- ✅ Header, section-length semantics, per-section MD5 integrity, differential 64 KB flash — all verified.
-- ✅ Working reseal for the MAIN image (`tools/reseal.py`).
+- ✅ Header semantics (4 payloads, stored/decoded pairs), per-payload MD5 integrity, differential
+  64 KB flash — all verified, incl. exact closure `0x2C + Σstored + 4·16 + 2 == filesize`.
+- ✅ Working **verify + reseal for all four payloads** (`tools/reseal.py`): MAIN, DSP_PROGRAM,
+  DSP_DATA, FPGA. Each sibling confirmed to LZSS-decode to its header length (TIPA / 31601130 prefixes).
 - ✅ Firmware-compatible LZSS **compressor** (`tools/pack_lzss.py`, round-trip verified) and full
   **repack chain** (`tools/repack_main.py`): extract → modify → recompress → re-seal, demonstrated
   end-to-end (produces a valid .dat whose MAIN image decodes to the modified bytes).
-- ◻ DSP/FPGA section inner record format — open (only needed for DSP/FPGA mods).
+- ◻ DSP (TI AIS "TIPA") and FPGA bitstream *internal* formats — open (needed only to meaningfully
+  edit those payloads; the container can already re-seal them).
