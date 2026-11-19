@@ -47,8 +47,8 @@ offset   size      field
   the fixed MAIN → DSP_PROGRAM → DSP_DATA → FPGA order and includes a payload only while it and its
   MD5 fit before the 2-byte trailer, so MAIN-only or MAIN+DSP files reseal correctly too.
 - The header semantics and offset formulas were first identified via jeskko/ic7300-homebrew and
-  independently corroborated by zarthur/ic-7300_firmware (see **Related work** in the
-  [README](../README.md#related-work)); the exact values above are confirmed against our own v1.42 image.
+  independently corroborated by zarthur/ic-7300_firmware (see [`related-work.md`](related-work.md));
+  the exact values above are confirmed against our own v1.42 image.
 
 ## Integrity & flashing (from the code)
 - Integrity is **standard MD5 per section** — **no signature** (see `modding-feasibility.md`).

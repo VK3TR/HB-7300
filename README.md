@@ -11,6 +11,9 @@ Reverse-engineering notes, tooling, and a reconstructed CI-V command reference f
 
 ## Related work
 
+> A full side-by-side of all four projects — jeskko, zarthur, sq6emm, and this repo — with the
+> shared-constants table and the RZ/A1 family taxonomy is in [`docs/related-work.md`](docs/related-work.md).
+
 A far more complete, independent effort exists: **[jeskko/ic7300-homebrew](https://github.com/jeskko/ic7300-homebrew)**
 — it covers everything here and much more, including a full **TMS320C6745 DSP disassembly** and the
 SCIF5/McASP1 **DSP link protocol**, the **FPGA link**, a **custom QEMU machine** that boots real firmware
@@ -157,6 +160,7 @@ docs/dsp-interface.md               MAIN<->DSP control interface: 25-param shado
 docs/rx-signal-access.md            what RX data the main CPU can see (no audio tap -> decoders belong on DSP/PC)
 docs/flash-driver.md                SPI-NOR flash driver (W25 via SPIBSC): erase/program primitive for reflashing
 docs/container-format.md            .dat container: 4 LZSS payloads (MAIN + DSP/FPGA stored/decoded pairs) + per-payload MD5; differential 64KB flash
+docs/related-work.md                side-by-side of the 4 projects (jeskko / zarthur / sq6emm / here) + RZ/A1 family taxonomy
 tools/depack_lzss.py                LZSS depacker (main image extractor)
 tools/pack_lzss.py                  LZSS compressor (firmware-compatible; round-trip verified)
 tools/repack_main.py                full chain: extract / rebuild a modified MAIN image into a .dat
