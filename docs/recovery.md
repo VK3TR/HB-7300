@@ -84,7 +84,7 @@ hard brick is much harder to undo and may be unrecoverable. Before flashing anyt
 
 1. **Dump the whole flash** via J491 (JTAG → J-Flash SPI) or an SOIC-8 clip on the W25 chip
    (`flashrom -p <programmer> -r ic7300_stock_full.bin`), **twice**, and **verify** the reads match.
-   Keep a copy off-device.
+   Keep a copy off-device. **Step-by-step: [`flash-backup-restore.md`](flash-backup-restore.md).**
 2. Also keep a **stock Icom `.dat`** on an SD card for the software path.
 3. Use a **stable supply** and never interrupt power during any write.
 4. Have the **probe/clip wired and tested** *before* you flash — not after something goes wrong.

@@ -161,6 +161,7 @@ docs/rx-signal-access.md            what RX data the main CPU can see (no audio 
 docs/flash-driver.md                SPI-NOR flash driver (W25 via SPIBSC): erase/program primitive for reflashing
 docs/container-format.md            .dat container: 4 LZSS payloads (MAIN + DSP/FPGA stored/decoded pairs) + per-payload MD5; differential 64KB flash
 docs/recovery.md                    flash slot map, brick windows, and recovery (A/B slots, no SD recovery mode, JTAG/SPI backstop)
+docs/flash-backup-restore.md        step-by-step SPI-NOR backup/restore (SOIC-8 clip + flashrom, or JTAG via J491); W25Q64, pinout
 docs/related-work.md                side-by-side of the 4 projects (jeskko / zarthur / sq6emm / here) + RZ/A1 family taxonomy
 tools/depack_lzss.py                LZSS depacker (main image extractor)
 tools/pack_lzss.py                  LZSS compressor (firmware-compatible; round-trip verified)
