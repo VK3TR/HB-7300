@@ -4,11 +4,12 @@ An **on-device FT8 receive decoder** for the IC-7300, as a homebrew app on the
 [jeskko/ic7300-homebrew](https://github.com/jeskko/ic7300-homebrew) SDK — the natural next step after
 the [`cw-rx`](../cw-decoder-app/) CW decoder.
 
-> **Status: decode core built and host-verified; the on-radio app (`main.c`) is still a scaffold.**
+> **Status: built, host-verified, and running end-to-end in the emulator** — not yet on a real radio.
 > The decode math is [kgoba/ft8_lib](https://github.com/kgoba/ft8_lib) (MIT, pinned `9fec6ca`),
 > vendored under `third_party/ft8_lib/`. The host test decodes synthesized FT8 to an exact copy
-> (≈ −18 dB in its noise model, 281 KB heap). `main.c` is **not** emulator/hardware-tested — do not
-> flash it.
+> (≈ −18 dB in its noise model). `FT8.BIN` boots on jeskko's rz-a1h QEMU machine through the real
+> IC-7300 firmware + homebrew loader, taps the 12 kHz RX audio, and decodes a WAV to the correct text
+> on-screen (`test_emu.py`). Not hardware-tested — treat on-air use as experimental; no TX.
 
 ## What's here
 | File | State |
@@ -17,7 +18,9 @@ the [`cw-rx`](../cw-decoder-app/) CW decoder.
 | `ft8_core.h` / `ft8_core.c` | ✅ slot interface over ft8_lib (monitor → sync → LDPC → unpack), **built & host-verified** |
 | `host_test.c` + `Makefile` | ✅ encode + GFSK-synth + noise + decode self-test; `make test` runs an SNR sweep |
 | `third_party/ft8_lib/` | ✅ vendored decode+encode subset of kgoba/ft8_lib (no PortAudio/WAV); `LICENSE` kept |
-| `main.c` | ◻ SDK app **scaffold**: slot scheduler + audio drain + waterfall UI + decode list (syntax-checked vs the real SDK headers; not run) |
+| `main.c` | ✅ SDK app: free-run slot scheduler + audio drain + waterfall UI + decode list, **runs in the emulator** and decodes to screen |
+| `build_bin.sh` / `test_emu.py` | ✅ target build (SDK runtime + ft8_lib + shim → `FT8.BIN`) and the end-to-end emulator harness |
+| `ft8_shim.c` | ✅ freestanding libc/libm shim (malloc→hb heap; string + math fns) so ft8_lib links against `-nostdlib` |
 
 ## Build & run the host test
 ```

@@ -1,13 +1,19 @@
 # FT8 decoder — homebrew app design sketch (IC-7300)
 
-**Status: decode core built and host-verified; the on-radio app (`main.c`) is still a scaffold.**
-The DSP/decode is **[kgoba/ft8_lib](https://github.com/kgoba/ft8_lib)** (MIT, pinned `9fec6ca`),
-vendored under `third_party/ft8_lib/`, the same codec
-[zarthur/ic-7300_firmware](https://github.com/zarthur/ic-7300_firmware) used. `ft8_core.c` wraps it
-in the slot interface and `host_test.c` proves the path on a PC: a synthesized FT8 signal decodes to
-an **exact copy** across message types, down to ≈ **−18 dB** in the test's noise model, in **281 KB**
-of heap (default profile). What is *not* done: `main.c` on the emulator/radio, and TX. This document
-is the bridge between that codec and the jeskko homebrew SDK.
+**Status: built, host-verified, and running end-to-end in the emulator.** The DSP/decode is
+**[kgoba/ft8_lib](https://github.com/kgoba/ft8_lib)** (MIT, pinned `9fec6ca`), vendored under
+`third_party/ft8_lib/`, the same codec [zarthur/ic-7300_firmware](https://github.com/zarthur/ic-7300_firmware)
+used. `ft8_core.c` wraps it in the slot interface; `host_test.c` proves the path on a PC (exact copy
+across message types, down to ≈ **−18 dB** in the test's noise model); and `main.c` builds into a real
+`FT8.BIN` that **boots on jeskko's rz-a1h QEMU machine through the real IC-7300 firmware + homebrew
+loader, taps the 12 kHz RX audio, and decodes a WAV to the correct text on-screen**
+(`+15 1200 CQ HB9XYZ JN47`) — see `test_emu.py`. What is *not* done: a real radio, and TX.
+
+**Target build gotcha (fixed):** ft8_lib's `monitor_process` put the FFT in/out buffers on the stack
+as VLAs (~30 KB at nfft=3840), which overflows the SDK's **16 KB app stack** (bss is immediately
+followed by the stack in `app.ld`) and silently corrupts globals — the RZ/A1 maps NULL to
+read-zero/ignore-writes, so the corrupted app just spins without faulting. Fixed by moving those
+buffers to the heap (`monitor_init`); watch stack use for any further ft8_lib code pulled in.
 
 RX **decode only** for v1 (no TX — see §8). Same two-route reasoning as the rest of this repo: an
 app on jeskko's loader is far lower-risk than patching firmware, and FT8 on the 7300 must be *built*
@@ -196,10 +202,13 @@ test regardless.
    frequencies, decoding to ≈ −18 dB in the model (and correctly *failing* below −18 dB, so the test
    discriminates). `make test` runs the SNR sweep. *Still to add: decode real off-air WAVs and compare
    against WSJT-X, matching zarthur's methodology.*
-2. **Emulator — TODO.** Run in jeskko's QEMU with a WAV played into the RX slot (as `cw-rx` was
-   exercised), check slot scheduling, waterfall draw, and measure per-slice decode time.
-3. **On-target — TODO.** Heap already estimated at 281 KB (fits); confirm the real figure and that a
-   slot's decode completes within budget. Only then consider a radio.
+2. **Emulator — DONE.** `test_emu.py` builds the loader+flash+SD+`FT8.BIN`, boots the rz-a1h QEMU
+   machine, launches FT8 via Homebrew Apps, plays an FT8 WAV into DX_REC L (looped), and reads the
+   decode over QMP. Result: `ft8_create` succeeds (heap **~311 KB** of 448 KB, measured live), the
+   free-run capture fills, and within a few slots it decodes **`CQ HB9XYZ JN47`** — exact match. Runs
+   ~⅓ real-time under TCG soft-float; a decode landed ~110 s in.
+3. **On-target — TODO.** Heap and decode now confirmed in emulation; a real radio is the remaining
+   step (and needs the hardware-tested disclosures in the README).
 
 ---
 
