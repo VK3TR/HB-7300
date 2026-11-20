@@ -13,6 +13,10 @@ own licenses, reproduced via the files below.
   `third_party/ft8_lib/common/monitor.{c,h}` + `common.h`,
   `third_party/ft8_lib/fft/` (kiss_fft, kiss_fftr, _kiss_fft_guts.h).
 - Full license text: `third_party/ft8_lib/LICENSE`.
+- **Local modification:** `common/monitor.c` + `common/monitor.h` — `monitor_process` declared two
+  stack VLAs (`timedata[nfft]`, `freqdata[nfft/2+1]`, ~30 KB total at nfft=3840) that overflow the
+  SDK's 16 KB app stack and corrupt memory. They are moved to heap buffers allocated once in
+  `monitor_init` and freed in `monitor_free`. Numerically identical; the host build is unaffected.
 - **Local modification:** `fft/kiss_fftr.c` — the three `fprintf(stderr, ...)` error prints on
   dead alloc/odd-nfft paths are replaced with comments, so the freestanding on-radio build pulls in
   no stdio/`_impure_ptr`. Behaviour is unchanged (those branches are not taken in normal use); the

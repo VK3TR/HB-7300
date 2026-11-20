@@ -73,6 +73,8 @@ void monitor_init(monitor_t* me, const monitor_config_t* cfg)
         // me->window[i] = (i < len_window) ? hann_i(i, len_window) : 0;
     }
     me->last_frame = (float*)calloc(me->nfft, sizeof(me->last_frame[0]));
+    me->timedata = malloc(me->nfft * sizeof(kiss_fft_scalar));          // HB-7300: off the stack
+    me->freqdata = malloc((me->nfft / 2 + 1) * sizeof(kiss_fft_cpx));
 
     LOG(LOG_INFO, "Block size = %d\n", me->block_size);
     LOG(LOG_INFO, "Subblock size = %d\n", me->subblock_size);
@@ -116,6 +118,8 @@ void monitor_free(monitor_t* me)
 {
     waterfall_free(&me->wf);
     free(me->fft_work);
+    free(me->freqdata);   // HB-7300
+    free(me->timedata);   // HB-7300
     free(me->last_frame);
     free(me->window);
 }
@@ -139,8 +143,10 @@ void monitor_process(monitor_t* me, const float* frame)
     // Loop over block subdivisions
     for (int time_sub = 0; time_sub < me->wf.time_osr; ++time_sub)
     {
-        kiss_fft_scalar timedata[me->nfft];
-        kiss_fft_cpx freqdata[me->nfft / 2 + 1];
+        // HB-7300: these were stack VLAs (~30 KB total at nfft=3840) that overflowed the SDK's
+        // 16 KB app stack; moved to heap buffers allocated once in monitor_init.
+        kiss_fft_scalar* timedata = (kiss_fft_scalar*)me->timedata;
+        kiss_fft_cpx* freqdata = (kiss_fft_cpx*)me->freqdata;
 
         // Shift the new data into analysis frame
         for (int pos = 0; pos < me->nfft - me->subblock_size; ++pos)

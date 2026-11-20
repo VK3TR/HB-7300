@@ -33,6 +33,8 @@ typedef struct
     float fft_norm;      ///< FFT normalization factor
     float* window;       ///< Window function for STFT analysis (nfft samples)
     float* last_frame;   ///< Current STFT analysis frame (nfft samples)
+    void* timedata;      ///< HB-7300: heap STFT input (was a stack VLA; 16 KB app stack)
+    void* freqdata;      ///< HB-7300: heap STFT output (was a stack VLA)
     ftx_waterfall_t wf;  ///< Waterfall object
     float max_mag;       ///< Maximum detected magnitude (debug stats)
 

@@ -64,13 +64,15 @@ size_t ft8_heap_estimate(const ft8_config *cfg)
     size_t mag   = (size_t)max_blocks * cfg->time_osr * cfg->freq_osr * num_bins; /* uint8 */
     size_t win   = (size_t)nfft * sizeof(float);          /* window */
     size_t frame = (size_t)nfft * sizeof(float);          /* last_frame */
+    size_t td    = (size_t)nfft * sizeof(float);          /* monitor timedata (heap, HB-7300) */
+    size_t fd    = (size_t)(nfft / 2 + 1) * 2 * sizeof(float); /* monitor freqdata (cpx) */
     size_t fftwk = 0;
     kiss_fftr_alloc(nfft, 0, 0, &fftwk);                  /* exact kiss work size (query) */
     size_t cands = (size_t)FT8_MAX_CANDIDATES * sizeof(ftx_candidate_t);
     size_t seen  = (size_t)cfg->max_decodes * sizeof(ftx_message_t);
     size_t view  = (size_t)num_bins * max_blocks;         /* UI waterfall view */
     size_t acc   = (size_t)block_size * sizeof(float);    /* ft8_feed accumulator */
-    return mag + win + frame + fftwk + cands + seen + view + acc;
+    return mag + win + frame + td + fd + fftwk + cands + seen + view + acc;
 }
 
 ft8_rx *ft8_create(const ft8_config *cfg)

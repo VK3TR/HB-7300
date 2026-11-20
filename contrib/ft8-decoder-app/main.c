@@ -17,6 +17,7 @@
 
 #include "ft8_core.h"
 #include <stddef.h>
+#include <stdint.h>
 
 /* ---- layout ---- */
 #define WF_Y     0
@@ -57,6 +58,11 @@ volatile int      g_decodes;      /* total messages decoded */
 volatile int      g_slot;         /* free-run slot counter */
 volatile uint32_t g_samples;      /* RX samples fed to the decoder */
 char              g_last[32];     /* text of the most recent decode */
+/* debug observability for the emulator bring-up */
+volatile uint32_t g_dbg_create;   /* g_rx value captured right after ft8_create (0 = NULL) */
+volatile int      g_dbg_state;    /* current state (0=CAP 1=DECODE) */
+volatile int      g_dbg_prog;     /* capture_progress * 1000 */
+volatile int      g_dbg_heap;     /* ft8_heap_estimate bytes */
 
 /* "+dB FFFF TEXT" per decode — tiny int formatter, no libc */
 static void on_msg(void *ctx, const ft8_decode *d)
@@ -135,8 +141,14 @@ int main(void)
     if (!hb_gfx_open()) return 1;
 
     g_cfg = ft8_default_config();
-    if (ft8_heap_estimate(&g_cfg) > 430 * 1024) g_cfg.time_osr = 1;   /* keep margin in 448 KB */
+    g_dbg_heap = (int)ft8_heap_estimate(&g_cfg);
+    if ((unsigned)g_dbg_heap > 430 * 1024) g_cfg.time_osr = 1;   /* keep margin in 448 KB */
     g_rx = ft8_create(&g_cfg);
+    g_dbg_create = (uint32_t)(uintptr_t)g_rx;      /* captured before the NULL check */
+    if (!g_rx && g_cfg.time_osr > 1) {             /* retry smaller if the first profile failed */
+        g_cfg.time_osr = 1; g_rx = ft8_create(&g_cfg);
+        g_dbg_create = (uint32_t)(uintptr_t)g_rx;
+    }
     if (!g_rx) { hb_gfx_close(); return 2; }
     hb_audio_open();
     ft8_slot_begin(g_rx);
@@ -151,6 +163,8 @@ int main(void)
         }
 
         /* 2) free-run slot machine: fill the waterfall, then decode, then restart */
+        g_dbg_prog = (int)(ft8_capture_progress(g_rx) * 1000.0f);
+        g_dbg_state = (int)g_state;
         if (g_state == CAP && ft8_capture_progress(g_rx) >= 0.99f)
             g_state = DECODE;
         if (g_state == DECODE) {
