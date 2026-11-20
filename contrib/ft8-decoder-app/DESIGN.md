@@ -1,9 +1,13 @@
 # FT8 decoder — homebrew app design sketch (IC-7300)
 
-**Status: design + interface scaffold. Not built, not tested.** Unlike the `cw-rx` app (which is
-host-verified), this is a plan. The decode math is not ours — it's **[kgoba/ft8_lib](https://github.com/kgoba/ft8_lib)**
-(MIT), the same codec [zarthur/ic-7300_firmware](https://github.com/zarthur/ic-7300_firmware) built
-its FT8 prototype on. This document is the bridge between that codec and the jeskko homebrew SDK.
+**Status: decode core built and host-verified; the on-radio app (`main.c`) is still a scaffold.**
+The DSP/decode is **[kgoba/ft8_lib](https://github.com/kgoba/ft8_lib)** (MIT, pinned `9fec6ca`),
+vendored under `third_party/ft8_lib/`, the same codec
+[zarthur/ic-7300_firmware](https://github.com/zarthur/ic-7300_firmware) used. `ft8_core.c` wraps it
+in the slot interface and `host_test.c` proves the path on a PC: a synthesized FT8 signal decodes to
+an **exact copy** across message types, down to ≈ **−18 dB** in the test's noise model, in **281 KB**
+of heap (default profile). What is *not* done: `main.c` on the emulator/radio, and TX. This document
+is the bridge between that codec and the jeskko homebrew SDK.
 
 RX **decode only** for v1 (no TX — see §8). Same two-route reasoning as the rest of this repo: an
 app on jeskko's loader is far lower-risk than patching firmware, and FT8 on the 7300 must be *built*
@@ -130,27 +134,28 @@ but it isn't surfaced to apps. So UTC must come from one of:
 
 ## 6. Memory & CPU budget (the other hard constraint)
 
-Heap ceiling is **448 KB**. The waterfall dominates. ft8_lib allocates an 8-bit magnitude waterfall
-of roughly:
+Heap ceiling is **448 KB**. The waterfall dominates. ft8_lib's actual allocation (from `monitor.c`):
 
 ```
-mag_bytes ≈ max_blocks × time_osr × freq_osr × num_bins
-  max_blocks ≈ slot / symbol_period ≈ 15 / 0.16 ≈ 93
-  num_bins   ≈ decode_bandwidth / (sample_rate / nfft),  nfft = block_size × freq_osr
+mag_bytes = max_blocks × time_osr × freq_osr × num_bins   (uint8)
+  max_blocks = slot / symbol_period = 15 / 0.16 = 93
+  num_bins   = ⌊f_max·0.16⌋+1 − ⌊f_min·0.16⌋      (in 6.25 Hz units; freq_osr is the separate ×)
 ```
 
-Worked cases (sample_rate 12 kHz, block 1920):
+`ft8_heap_estimate()` mirrors this exactly (waterfall + window + frame + kiss FFT work + candidate
+list + de-dup table + the UI view + the feed accumulator). **Measured** on the host build:
 
-| decode BW | time_osr | freq_osr | num_bins | waterfall | verdict |
-|---|---|---|---|---|---|
-| 0–3000 Hz | 2 | 2 | ~960 | **~350 KB** | fits 448 KB but tight (best sensitivity) |
-| 0–3000 Hz | 1 | 2 | ~960 | ~180 KB | comfortable, some sensitivity loss |
-| 0–1500 Hz | 2 | 2 | ~480 | ~175 KB | comfortable, half-band only |
+| decode BW | time_osr | freq_osr | total heap | of 448 KB |
+|---|---|---|---|---|
+| **200–3000 Hz** | **2** | **2** | **281 KB** | **fits comfortably** (default) |
+| 200–3000 Hz | 1 | 2 | 199 KB | more headroom, some sensitivity loss |
+| 200–1800 Hz | 2 | 2 | 194 KB | narrow band |
 
-Plus FFT scratch (kiss_fftr for nfft=3840: tens of KB), candidate list, and LDPC working set (small).
-**Conclusion: feasible, but memory-bound — decode bandwidth and oversampling must be tuned to the
-heap. `ft8_core` takes `f_min/f_max/time_osr/freq_osr` as config, and `ft8_heap_estimate()` lets
-`main.c` pick a safe profile at startup.** The exact fit is **the first thing to measure on target.**
+So the earlier "~350 KB, tight" worry was a miscount (it double-applied `freq_osr`); the real
+`max_blocks·2·2·num_bins` waterfall is ~163 KB and the **full-band osr 2/2 profile fits with ~165 KB
+to spare.** `ft8_create()` still takes the profile as config and `ft8_heap_estimate()` lets `main.c`
+check before allocating, but heap is **no longer the binding constraint** — stack during LDPC and the
+per-slice decode time are what remain to measure on target.
 
 **CPU:** the FFTs are cheap (~186 real-FFTs of 3840 pts per slot). The cost is sync search + LDPC
 (hundreds of iterations). ft8_lib does this in well under a second on a PC; on a 400 MHz A9 expect a
@@ -185,13 +190,16 @@ test regardless.
 
 ## 9. Validation plan (same philosophy as `cw-rx`)
 
-1. **Host first.** `host_test.c`: synthesize an FT8 signal with ft8_lib `encode` (+ added noise), run
-   it through `ft8_core`, assert the decoded text matches — down a sweep of SNR. Also decode a few
-   real off-air WAVs and compare against WSJT-X (match zarthur's methodology).
-2. **Emulator.** Run in jeskko's QEMU with a WAV played into the RX slot (as `cw-rx` was exercised),
-   check slot scheduling, waterfall draw, and memory headroom.
-3. **On-target measurement.** Confirm the heap profile fits and a slot's decode completes within
-   budget. Only then consider a radio.
+1. **Host first — DONE.** `host_test.c` synthesizes an FT8 signal with ft8_lib `encode` + GFSK
+   (adapted from `demo/gen_ft8.c`), adds calibrated noise, runs it through `ft8_core`, and asserts the
+   decoded text matches. Result: exact copy for CQ/standard/report/73 messages at multiple audio
+   frequencies, decoding to ≈ −18 dB in the model (and correctly *failing* below −18 dB, so the test
+   discriminates). `make test` runs the SNR sweep. *Still to add: decode real off-air WAVs and compare
+   against WSJT-X, matching zarthur's methodology.*
+2. **Emulator — TODO.** Run in jeskko's QEMU with a WAV played into the RX slot (as `cw-rx` was
+   exercised), check slot scheduling, waterfall draw, and measure per-slice decode time.
+3. **On-target — TODO.** Heap already estimated at 281 KB (fits); confirm the real figure and that a
+   slot's decode completes within budget. Only then consider a radio.
 
 ---
 
@@ -202,11 +210,11 @@ test regardless.
 | 1 | Wall-clock/UTC for slot sync | **Answered: none in the SDK.** Only relative `hb_millis`/`fw_tick_ms`. v1 = manual UTC entry; target = add a firmware clock entry point (§5). |
 | 2 | Audio rate & tap | **Answered:** app gets 12 kHz mono int16 (runtime decimates 48 kHz→12 kHz), ft8_lib-native (§2). |
 | 3 | Capture without drops | **Answered + constrains design:** 1.37 s ring → drain every pass, decode incrementally (§4a). |
-| 4 | Heap fit | **Open — measure.** Does 448 KB hold `osr 2/2`, 0–3000 Hz waterfall + FFT scratch, or must we drop to `osr 1`/narrower? (§6) |
-| 5 | Per-slice decode cost | **Open — measure.** Tune `ft8_slot_decode`'s work-slice so it finishes in the ~2.2 s tail without starving the audio drain (§4a). |
-| 6 | App size with ft8_lib linked | **Open — confirm** under the 1 MB limit (decode-only subset is small). |
+| 4 | Heap fit | **Answered:** `ft8_heap_estimate()` = **281 KB** for the default 200–3000 Hz osr 2/2 profile (199 KB at osr 1/2). Fits 448 KB with room (§6). |
+| 5 | Per-slice decode cost | **Open — measure on target.** Tune `FT8_DECODE_SLICE` so `ft8_slot_decode` finishes in the ~2.2 s tail without starving the audio drain (§4a). |
+| 6 | App size with ft8_lib linked | **Open — confirm** under the 1 MB limit (decode-only subset is small; host object is ~58 KB). |
+| 7 | LDPC stack use | **Open — measure.** `ftx_decode_candidate` uses stack arrays (log174 etc.); confirm against the app stack. |
 
-Q1–Q3 are settled from the SDK headers; the remaining three are **on-target measurements**, not
-design unknowns. The interface in [`ft8_core.h`](ft8_core.h) is written so `main.c` and `host_test.c`
-can be built against it now (incremental decode included), with `ft8_core.c` filled in against a
-pinned ft8_lib once Q4–Q6 are measured in the emulator / on hardware.
+Q1–Q4 are settled (headers + the built host test); the rest are **on-target measurements**, not
+design unknowns. `ft8_core.c` is implemented against the pinned ft8_lib and host-verified; `main.c`
+is the remaining build-out, plus the emulator/hardware passes.

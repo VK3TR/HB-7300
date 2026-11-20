@@ -4,18 +4,26 @@ An **on-device FT8 receive decoder** for the IC-7300, as a homebrew app on the
 [jeskko/ic7300-homebrew](https://github.com/jeskko/ic7300-homebrew) SDK — the natural next step after
 the [`cw-rx`](../cw-decoder-app/) CW decoder.
 
-> **Status: design + interface scaffold, NOT a working app.** The decode math is
-> [kgoba/ft8_lib](https://github.com/kgoba/ft8_lib) (MIT) — not yet vendored or wired in. Nothing
-> here should be flashed. This exists to make the build concrete and to capture what the SDK does and
-> doesn't give us.
+> **Status: decode core built and host-verified; the on-radio app (`main.c`) is still a scaffold.**
+> The decode math is [kgoba/ft8_lib](https://github.com/kgoba/ft8_lib) (MIT, pinned `9fec6ca`),
+> vendored under `third_party/ft8_lib/`. The host test decodes synthesized FT8 to an exact copy
+> (≈ −18 dB in its noise model, 281 KB heap). `main.c` is **not** emulator/hardware-tested — do not
+> flash it.
 
 ## What's here
 | File | State |
 |---|---|
-| [`DESIGN.md`](DESIGN.md) | the sketch: architecture, slot model, memory/CPU budget, time-sync, open questions — **start here** |
-| `ft8_core.h` | proposed slot-oriented interface over ft8_lib (compiles; host + app build against it) |
-| `main.c` | SDK app **scaffold**: slot scheduler + audio drain + waterfall UI + decode list (syntax-checked vs the real SDK headers) |
-| `ft8_core.c`, `host_test.c`, `third_party/ft8_lib/` | **TODO** — the actual decode glue + vendored codec |
+| [`DESIGN.md`](DESIGN.md) | architecture, slot model, memory/CPU budget, time-sync, open questions — **start here** |
+| `ft8_core.h` / `ft8_core.c` | ✅ slot interface over ft8_lib (monitor → sync → LDPC → unpack), **built & host-verified** |
+| `host_test.c` + `Makefile` | ✅ encode + GFSK-synth + noise + decode self-test; `make test` runs an SNR sweep |
+| `third_party/ft8_lib/` | ✅ vendored decode+encode subset of kgoba/ft8_lib (no PortAudio/WAV); `LICENSE` kept |
+| `main.c` | ◻ SDK app **scaffold**: slot scheduler + audio drain + waterfall UI + decode list (syntax-checked vs the real SDK headers; not run) |
+
+## Build & run the host test
+```
+make test          # builds ft8_test and runs the SNR sweep for "CQ HB9XYZ JN47"
+./ft8_test "CQ HB9XYZ JN47" 0 1200   # one run: message, SNR(dB, model), audio freq(Hz)
+```
 
 ## Why it's harder than `cw-rx`
 FT8 is a UTC-slotted, LDPC-coded, 8-FSK protocol — it needs a 15 s time grid, an FFT waterfall, and
@@ -26,7 +34,8 @@ a soft-decision decoder, not a single Goertzel bin. See `DESIGN.md §1`.
 - ✅ **Audio tap works** — same `DX_REC` stream `cw-rx` uses.
 - ⚠️ **1.37 s capture ring** → the app must drain every pass and **decode incrementally** (`DESIGN.md §4a`).
 - ⚠️ **No UTC/RTC API** — only relative `hb_millis()`; v1 uses manual UTC entry (`DESIGN.md §5`).
-- ◻ **Heap fit (448 KB), per-slice decode cost, app size** — on-target measurements (`DESIGN.md §10`).
+- ✅ **Heap fit** — `ft8_heap_estimate()` = **281 KB** (default) / 199 KB (osr 1/2), under 448 KB (`DESIGN.md §6`).
+- ◻ **Per-slice decode time, app size, LDPC stack** — on-target measurements (`DESIGN.md §10`).
 
 ## License / provenance
 The eventual vendored codec is **ft8_lib** (MIT, Kārlis Goba) + **kiss_fft** (BSD-3). Pin the revision
