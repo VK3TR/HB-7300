@@ -1,2 +1,6 @@
 # built host-test binary (reproduce with `make`)
 ft8_test
+# target build + emulator artifacts (reproduce with build_bin.sh / test_emu.py)
+FT8.BIN
+build/
+*.wav

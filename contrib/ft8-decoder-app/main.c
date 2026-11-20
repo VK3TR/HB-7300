@@ -1,16 +1,14 @@
-/* FT8 decoder app for the IC-7300 homebrew SDK — UI + slot scheduler SCAFFOLD.
+/* FT8 decoder app for the IC-7300 homebrew SDK (jeskko/ic7300-homebrew, loader ABI v4).
  *
- * ---------------------------------------------------------------------------------------------
- *  SCAFFOLD, NOT A WORKING APP. It shows the app's shape against the real SDK + the proposed
- *  ft8_core interface. It compiles (syntax) against jeskko's headers, but ft8_core.c and the
- *  vendored ft8_lib are not implemented yet (see DESIGN.md). Do not flash this.
- * ---------------------------------------------------------------------------------------------
+ * Taps the 12 kHz demodulated RX audio, builds an ft8_lib waterfall, and every ~15 s decodes the
+ * slot: Costas sync -> LDPC -> message text, scrolled on a full-screen canvas with a live
+ * waterfall strip. DSP/decode is ft8_core.c over vendored ft8_lib (third_party/ft8_lib/).
  *
- * Flow (DESIGN.md §4/§4a): drain 12 kHz RX audio every pass into ft8_feed(); on the UTC 15 s grid,
- * ft8_slot_begin() at the boundary, capture ~12.8 s, then run ft8_slot_decode() INCREMENTALLY
- * (a bounded slice per pass) so the 1.37 s audio ring never overruns. Decodes scroll as text; the
- * ft8_lib waterfall is drawn up top. The SDK exposes no UTC clock, so the operator sets it once and
- * we free-run from hb_millis() (DESIGN.md §5).
+ * Timing: the SDK exposes no UTC clock (DESIGN.md §5), so this build FREE-RUNS — it captures until
+ * the waterfall is full (~14.9 s), decodes, and repeats, with no operator time entry. That decodes
+ * any transmission that falls in the window (ft8_lib's sync search finds the DT); a future build can
+ * add UTC-slot alignment for higher yield. Free-run is also what lets the emulator decode a WAV
+ * played into the RX slot with no input injection.
  */
 #include "hb/app.h"
 #include "hb/audio.h"
@@ -40,7 +38,7 @@
 
 /* ---- decode scroll buffer ---- */
 static char g_line[ROWS][COLS + 1];
-static int  g_nlines;                            /* total pushed; newest = bottom */
+static int  g_nlines;
 
 static void push_line(const char *s)
 {
@@ -54,10 +52,18 @@ static void push_line(const char *s)
     g_nlines++;
 }
 
-/* append "HH:MM:SS +dB  FREQ  TEXT" — tiny int formatter, no libc */
+/* observable globals for the emulator test (read over QMP by test_emu.py) */
+volatile int      g_decodes;      /* total messages decoded */
+volatile int      g_slot;         /* free-run slot counter */
+volatile uint32_t g_samples;      /* RX samples fed to the decoder */
+char              g_last[32];     /* text of the most recent decode */
+
+/* "+dB FFFF TEXT" per decode — tiny int formatter, no libc */
 static void on_msg(void *ctx, const ft8_decode *d)
 {
     (void)ctx;
+    for (int i = 0; i < 31; i++) { g_last[i] = d->text[i]; if (!d->text[i]) break; }
+    g_last[31] = 0;
     char b[COLS + 1]; int n = 0;
     int f = d->freq_hz; if (f < 0) f = 0; if (f > 9999) f = 9999;
     int snr = d->snr_db >= 0 ? (int)(d->snr_db + 0.5f) : (int)(d->snr_db - 0.5f);
@@ -68,54 +74,44 @@ static void on_msg(void *ctx, const ft8_decode *d)
     for (const char *p = d->text; *p && n < COLS; p++) b[n++] = *p;
     b[n] = 0;
     push_line(b);
-}
-
-/* ---- UTC slot clock (free-run from hb_millis; operator sets the anchor) ---- */
-static uint32_t g_anchor_ms;                     /* hb_millis() at g_anchor_utc */
-static int32_t  g_anchor_utc = -1;               /* seconds; -1 = not set yet */
-
-static int32_t now_utc(void) { return g_anchor_utc + (int32_t)((hb_millis() - g_anchor_ms) / 1000); }
-static int     slot_phase_ms(void)               /* 0..14999 within the current 15 s slot */
-{
-    if (g_anchor_utc < 0) return -1;
-    uint32_t d = hb_millis() - g_anchor_ms;
-    int32_t ms = (int32_t)(d % 15000) + (g_anchor_utc % 15) * 1000;
-    return ms % 15000;
+    g_decodes++;
 }
 
 /* ---- app state ---- */
 static ft8_rx    *g_rx;
 static ft8_config g_cfg;
 static enum { CAP, DECODE } g_state = CAP;
-static int g_last_slot = -1;
-#define CAP_MS 12800                             /* capture window end within the slot */
 
 static void draw(hb_canvas *cv)
 {
     hb_clear(cv, BG);
 
-    /* waterfall from ft8_core (owned by it; may be NULL early) */
+    /* waterfall from ft8_core (owned by it; NULL until the first blocks arrive) */
     int wc = 0, wr = 0;
     const uint8_t *wf = ft8_waterfall(g_rx, &wc, &wr);
     if (wf && wc > 0 && wr > 0) {
-        for (int x = 0; x < wc && x < HB_SCREEN_W; x++)
+        int xs = wc > HB_SCREEN_W ? HB_SCREEN_W : wc;
+        for (int x = 0; x < xs; x++)
             for (int y = 0; y < wr && y < WF_H; y++) {
-                uint8_t m = wf[y * wc + x];       /* 0..255 magnitude */
+                uint8_t m = wf[y * wc + x];
                 hb_fill_rect(cv, x, WF_Y + y, 1, 1, HB_RGB(m / 2, m / 3, m));
             }
     }
 
-    /* status bar: UTC phase countdown + decode profile */
-    char s[40]; int n = 0;
-    const char *lbl = g_anchor_utc < 0 ? "SET UTC (tap)  " : (g_state == CAP ? "RX  " : "DECODE ");
+    /* status bar */
+    char s[48]; int n = 0;
+    const char *lbl = g_state == CAP ? "RX " : "DECODING ";
     for (const char *p = lbl; *p; p++) s[n++] = *p;
-    int ph = slot_phase_ms();
-    if (ph >= 0) { int t = (15000 - ph) / 1000; s[n++] = 'T'; s[n++] = '-'; s[n++] = '0' + t / 10; s[n++] = '0' + t % 10; }
+    if (g_state == CAP) {                          /* capture % */
+        int pct = (int)(ft8_capture_progress(g_rx) * 100.0f + 0.5f); if (pct > 99) pct = 99;
+        s[n++] = '0' + pct / 10; s[n++] = '0' + pct % 10; s[n++] = '%';
+    }
+    s[n++] = ' '; s[n++] = 'S'; s[n++] = '0' + (g_slot / 10) % 10; s[n++] = '0' + g_slot % 10;
+    s[n++] = ' '; s[n++] = 'N'; s[n++] = '0' + (g_decodes / 10) % 10; s[n++] = '0' + g_decodes % 10;
     s[n] = 0;
     hb_text(cv, 4, STAT_Y + 4, s, 1, g_state == CAP ? ACCENT : FG);
 
-    /* PROF hint + EXIT box */
-    hb_text(cv, EXIT_X - 64, STAT_Y + 4, "PROF", 1, DIM);
+    /* EXIT box */
     hb_fill_rect(cv, EXIT_X, 0, EXIT_S, EXIT_S, HB_RGB(60, 30, 30));
     hb_line(cv, EXIT_X + 10, 10, EXIT_X + EXIT_S - 10, EXIT_S - 10, FG);
     hb_line(cv, EXIT_X + EXIT_S - 10, 10, EXIT_X + 10, EXIT_S - 10, FG);
@@ -130,56 +126,45 @@ static void handle_input(bool *running)
 {
     if (hb_key_down(HB_KEY_EXIT)) { *running = false; return; }
     hb_touch t; hb_touch_read(&t);
-    if (t.down && !touched_prev) {
-        if (t.x >= EXIT_X && t.y < EXIT_S) { *running = false; }
-        else if (t.y < STAT_Y + STAT_H) {
-            /* SCAFFOLD: tapping the status bar stands in for the UTC-entry UI (DESIGN.md §5).
-             * Real app: a digit entry screen. Here: anchor "now" to a placeholder so the grid runs. */
-            if (g_anchor_utc < 0) { g_anchor_ms = hb_millis(); g_anchor_utc = 0; }
-            /* TODO: PROF tap cycles decode-BW/osr profiles via ft8_heap_estimate() + recreate g_rx */
-        }
-    }
+    if (t.down && !touched_prev && t.x >= EXIT_X && t.y < EXIT_S) *running = false;
     touched_prev = t.down;
 }
 
 int main(void)
 {
     if (!hb_gfx_open()) return 1;
+
     g_cfg = ft8_default_config();
-    /* Pick a profile that fits the heap before allocating (DESIGN.md §6). */
-    if (ft8_heap_estimate(&g_cfg) > 400 * 1024) { g_cfg.time_osr = 1; }   /* fall back */
+    if (ft8_heap_estimate(&g_cfg) > 430 * 1024) g_cfg.time_osr = 1;   /* keep margin in 448 KB */
     g_rx = ft8_create(&g_cfg);
     if (!g_rx) { hb_gfx_close(); return 2; }
     hb_audio_open();
+    ft8_slot_begin(g_rx);
 
     bool running = true;
     while (running) {
-        /* 1) always drain audio first — the ring is only ~1.37 s (DESIGN.md §4a) */
+        /* 1) drain audio every pass — the capture ring is only ~1.37 s (DESIGN.md §4a) */
         int16_t buf[1024]; int nn;
         while ((nn = hb_audio_read(buf, 1024)) > 0) {
-            if (g_state == CAP && g_anchor_utc >= 0) ft8_feed(g_rx, buf, nn);
+            if (g_state == CAP) { ft8_feed(g_rx, buf, nn); g_samples += (uint32_t)nn; }
             if (nn < 1024) break;
         }
 
-        /* 2) advance the UTC slot state machine */
-        if (g_anchor_utc >= 0) {
-            int slot = (int)(now_utc() / 15);
-            int ph   = slot_phase_ms();
-            if (slot != g_last_slot) {            /* new 15 s slot boundary */
-                g_last_slot = slot;
+        /* 2) free-run slot machine: fill the waterfall, then decode, then restart */
+        if (g_state == CAP && ft8_capture_progress(g_rx) >= 0.99f)
+            g_state = DECODE;
+        if (g_state == DECODE) {
+            /* one bounded decode slice per pass; audio keeps draining above */
+            if (ft8_slot_decode(g_rx, on_msg, NULL) == 0) {
+                g_slot++;
                 ft8_slot_begin(g_rx);
                 g_state = CAP;
-            }
-            if (g_state == CAP && ph >= CAP_MS) g_state = DECODE;
-            if (g_state == DECODE) {
-                /* one bounded decode slice per pass; audio keeps draining above (§4a) */
-                if (ft8_slot_decode(g_rx, on_msg, NULL) == 0) g_state = CAP; /* done; wait for next slot */
             }
         }
 
         handle_input(&running);
         draw(hb_gfx_canvas());
-        hb_gfx_present();                         /* yields to the radio until vsync */
+        hb_gfx_present();                          /* yields to the radio until vsync */
     }
 
     ft8_destroy(g_rx);

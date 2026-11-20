@@ -13,6 +13,10 @@ own licenses, reproduced via the files below.
   `third_party/ft8_lib/common/monitor.{c,h}` + `common.h`,
   `third_party/ft8_lib/fft/` (kiss_fft, kiss_fftr, _kiss_fft_guts.h).
 - Full license text: `third_party/ft8_lib/LICENSE`.
+- **Local modification:** `fft/kiss_fftr.c` — the three `fprintf(stderr, ...)` error prints on
+  dead alloc/odd-nfft paths are replaced with comments, so the freestanding on-radio build pulls in
+  no stdio/`_impure_ptr`. Behaviour is unchanged (those branches are not taken in normal use); the
+  surrounding `return NULL` / `exit(1)` logic is left intact. The host build is unaffected.
 - The GFSK synthesis in our `host_test.c` (`gfsk_pulse` / `synth_gfsk`) is adapted from ft8_lib's
   `demo/gen_ft8.c` and is likewise covered by ft8_lib's MIT license.
 
